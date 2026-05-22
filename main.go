@@ -1,82 +1,100 @@
 package main
 
 import (
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"log/slog"
-	"net"
 	"os"
 
 	"m3g4p0p/qrmaster/pretty"
+
+	"github.com/joho/godotenv"
+	"golang.org/x/exp/jsonrpc2"
 )
 
 var console = pretty.NewConsole(os.Stdout)
 
-type PingRequest struct {
+var binder = &jsonrpc2.ConnectionOptions{
+	Handler: jsonrpc2.HandlerFunc(Handle),
+}
+
+type PingParams struct {
 	Ping bool `json:"ping"`
 }
 
-func handleConn(conn *net.UDPConn) error {
-	data := make([]byte, 1024)
+type PingResult struct {
+	Pong bool `json:"pong"`
+}
 
-	for {
-		n, addr, err := conn.ReadFromUDP(data)
-		if err != nil {
-			return err
-		}
-		if _, _, err := conn.WriteMsgUDP(data[:n], nil, addr); err != nil {
-			return err
-		}
+func Handle(ctx context.Context, req *jsonrpc2.Request) (any, error) {
+	if req.Method != "ping" {
+		return nil, jsonrpc2.ErrMethodNotFound
 	}
+	var params PingParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return nil, jsonrpc2.ErrInvalidParams
+	}
+	return PingResult{Pong: params.Ping}, nil
 }
 
 var cmds = map[string]func() error{
 	"server": func() error {
-		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 9000})
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-		return handleConn(conn)
+		return nil
 	},
 	"client": func() error {
-		conn, err := net.DialUDP("udp", nil, &net.UDPAddr{Port: 9000})
+		ctx := context.Background()
+
+		listener, err := jsonrpc2.NetListener(ctx, "tcp", ":9090", jsonrpc2.NetListenOptions{})
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+
+		server, err := jsonrpc2.Serve(ctx, listener, binder)
+		if err != nil {
+			return err
+		}
+
+		conn, err := jsonrpc2.Dial(ctx, listener.Dialer(), binder)
 		if err != nil {
 			return err
 		}
 		defer conn.Close()
 
-		data, err := json.Marshal(PingRequest{Ping: true})
-		if err != nil {
+		params := PingParams{Ping: true}
+		call := conn.Call(ctx, "ping", params)
+
+		var result PingResult
+		if err := call.Await(ctx, &result); err != nil {
 			return err
 		}
-		if _, err := conn.Write(data); err != nil {
-			return err
-		}
+		console.Pretty(result)
 
-		res := make([]byte, 1024)
-
-		if n, err := conn.Read(res); err != nil {
-			return err
-		} else {
-			fmt.Println(string(res[:n]))
-		}
-
-		return nil
+		return server.Wait()
 	},
 }
 
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(console, nil)))
+
+	if err := godotenv.Load(); err != nil {
+		log.Fatalln(err)
+	}
+	key, err := hex.DecodeString(os.Getenv("SECRET_KEY"))
+	if err != nil {
+		log.Fatalln(err)
+	}
+	_ = key
 }
 
 func main() {
 	flag.Parse()
 
 	if flag.NArg() == 0 {
-		log.Fatalln("missing command")
+		log.Fatalln("msiing command")
 	}
 
 	if err := cmds[flag.Arg(0)](); err != nil {
