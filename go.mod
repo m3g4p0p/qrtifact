@@ -1,4 +1,4 @@
-module m3g4p0p/qrmaster
+module m3g4p0p/qrtifact
 
 go 1.26.1
 

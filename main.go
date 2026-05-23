@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"os"
 
-	"m3g4p0p/qrmaster/pretty"
+	"m3g4p0p/qrtifact/pretty"
 
 	"github.com/joho/godotenv"
 	"golang.org/x/exp/jsonrpc2"
